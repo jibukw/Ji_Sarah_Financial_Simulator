@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Ji & Sarah 학자금 대출 상환 시뮬레이터</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#b85c38" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Loan Sim" />
+<link rel="apple-touch-icon" href="icons/icon-192x192.png" />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans KR',sans-serif;background:#f9f3eb;color:#333;-webkit-font-smoothing:antialiased}
+input[type="range"]{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;background:#e8ddd0;outline:none}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#b85c38;cursor:pointer;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#b85c38;cursor:pointer;border:2px solid #fff}
+input[type="number"],input[type="text"]{font-family:'Noto Sans KR',sans-serif;padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px;color:#333;outline:none;transition:border .15s}
+input[type="number"]:focus,input[type="text"]:focus{border-color:#b85c38}
+button{font-family:'Noto Sans KR',sans-serif}
+table{border-collapse:collapse}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px}
+@supports(padding-top:env(safe-area-inset-top)){body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('./sw.js').then(r=>console.log('SW ok')).catch(e=>console.log('SW fail',e));
+  });
+}
+</script>
+<script type="text/babel">
+const{useState,useMemo}=React;
+
+const LOANS=[
+  {id:"1-01",principal:43392.82,rate:6.84},
+  {id:"1-02",principal:44291.93,rate:6.31},
+  {id:"1-03",principal:49079.48,rate:7.0},
+  {id:"1-06",principal:33142.48,rate:7.08},
+];
+const TOTAL_P=LOANS.reduce((a,l)=>a+l.principal,0);
+const J=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
+const D=n=>"$"+Math.round(n).toLocaleString("en-US");
+const BY=2027;const MX=15;
+
+function minPay(bal,rate){const r=rate/100/12;if(bal<=0)return 0;return Math.max(50,(bal*r*Math.pow(1+r,300))/(Math.pow(1+r,300)-1));}
+function applyLump(bs,amt,strat){
+  let rem=amt;const ord=strat==="avalanche"?[...bs].sort((a,b)=>b.rate-a.rate):[...bs].sort((a,b)=>a.bal-b.bal);
+  for(const t of ord){if(rem<=0)break;const b=bs.find(x=>x.id===t.id);if(b.bal<=0)continue;const p=Math.min(rem,b.bal);b.bal-=p;rem-=p;}
+  return bs;
+}
+
+function simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,monthlySave,initSavings,planChangeMonth,newMinPayUSD,gradRate}){
+  const rateDisc=autoPay?0.25:0;
+  const gr=gradRate||0; // graduated increase % every 2 years
+  let bs=LOANS.map(l=>({...l,bal:l.principal,effRate:Math.max(0,l.rate-rateDisc)}));
+  const tl=[];const ys=[];let totInt=0;let mo=0;let savings=initSavings||0;
+  const saveTarget=monthlySave||0;
+  const pcm=planChangeMonth||0;
+  const newMin=newMinPayUSD||0;
+
+  if(lumpSum>0&&lumpSumMonth===0)bs=applyLump(bs,lumpSum,strategy);
+
+  for(let yr=0;yr<MX;yr++){
+    const p=plans[yr]||plans[plans.length-1];
+    // Graduated increase: every 2 years, min payment goes up by gr%
+    const gradMultiplier=Math.pow(1+gr/100,Math.floor(yr/2));
+    const gradMinUSD=Math.round(1003.73*gradMultiplier);
+    const baseMinUSD=pcm>0&&(yr*12>=pcm)?newMin:gradMinUSD;
+    const loanJPY=Math.round(baseMinUSD*fx);
+    const surpBeforeSave=p.ji+p.sarah-p.living-loanJPY-(p.baby||0);
+    const actualSaveJPY=surpBeforeSave>=saveTarget?saveTarget:Math.max(0,surpBeforeSave);
+    const surp=surpBeforeSave-actualSaveJPY;
+    const extraUSD=Math.max(0,surp/fx);
+    const sBal=bs.reduce((a,c)=>a+Math.max(0,c.bal),0);
+    let yInt=0;let yPrin=0;let ySaved=0;
+
+    // Determine strategy phase
+    let phase=1;
+    if(surpBeforeSave<0)phase=1;
+    else if(extraUSD<200)phase=2;
+    else if(extraUSD>=200&&extraUSD<600)phase=3;
+    else phase=4;
+
+    for(let m=0;m<12;m++){
+      mo++;if(bs.every(b=>b.bal<0.01))break;
+      if(lumpSum>0&&lumpSumMonth===mo)bs=applyLump(bs,lumpSum,strategy);
+      const mSave=actualSaveJPY/fx;
+      savings+=mSave;
+      ySaved+=mSave;
+      let mI=0;
+      for(const b of bs){if(b.bal<=0)continue;const i=(b.bal*(b.effRate/100))/12;mI+=i;b.bal+=i;}
+      if(pcm>0&&mo>=pcm&&newMin>0){
+        const totalBal=bs.reduce((a,c)=>a+Math.max(0,c.bal),0);
+        for(const b of bs){if(b.bal<=0)continue;const share=(b.bal/totalBal)*newMin;const a=Math.min(share,b.bal);b.bal-=a;yPrin+=a;}
+      }else{
+        // Use graduated min payment
+        const totalBal=bs.reduce((a,c)=>a+Math.max(0,c.bal),0);
+        for(const b of bs){
+          if(b.bal<=0)continue;
+          const share=(b.bal/totalBal)*gradMinUSD;
+          const a=Math.min(share,b.bal);
+          b.bal-=a;yPrin+=a;
+        }
+      }
+      let ext=extraUSD;
+      if(ext>0){const ord=strategy==="avalanche"?[...bs].sort((a,b)=>b.effRate-a.effRate):[...bs].sort((a,b)=>a.bal-b.bal);
+        for(const t of ord){if(ext<=0)break;const b=bs.find(x=>x.id===t.id);if(b.bal<=0)continue;const pp=Math.min(ext,b.bal);b.bal-=pp;ext-=pp;yPrin+=pp;}}
+      totInt+=mI;yInt+=mI;
+      const tb=bs.reduce((a,c)=>a+Math.max(0,c.bal),0);
+      tl.push({month:mo,totalBalance:tb,interest:mI,principal:yPrin/(m+1),totalInterestPaid:totInt,savings,
+        balances:bs.map(b=>({id:b.id,balance:Math.max(0,b.bal)}))});
+      if(tb<0.01)break;
+    }
+
+    const eBal=bs.reduce((a,c)=>a+Math.max(0,c.bal),0);
+    const po=LOANS.filter(l=>{const prev=yr>0?ys[yr-1]?.loanBals?.find(x=>x.id===l.id)?.bal:l.principal;
+      const now=bs.find(x=>x.id===l.id)?.bal||0;return(prev>1&&now<1);}).map(l=>l.id);
+
+    ys.push({year:BY+yr,ji:p.ji,sarah:p.sarah,living:p.living,baby:p.baby||0,events:p.events||"",
+      totalIncome:p.ji+p.sarah,surplusBeforeSave:surpBeforeSave,actualSaveJPY,surplusJPY:surp,extraUSD,
+      yearInterest:yInt,yearPrincipal:yPrin,phase,
+      startBal:sBal,endBal:eBal,paidOff:po,savings,yearSaved:ySaved,minPayUSD:baseMinUSD,
+      loanBals:bs.map(b=>({id:b.id,bal:Math.max(0,b.bal)}))});
+    if(eBal<0.01)break;
+  }
+  return{timeline:tl,totalInterestPaid:totInt,monthsToPayoff:mo,yearSummaries:ys};
+}
+
+const thS={padding:"8px 4px",textAlign:"left",fontWeight:700,fontSize:11,color:"#b85c38",whiteSpace:"nowrap"};
+const tdS={padding:"6px 4px",verticalAlign:"middle"};
+const nI={width:85};
+const btn={padding:"8px 16px",borderRadius:8,border:"none",fontSize:12,fontWeight:600,cursor:"pointer"};
+
+function Tab({active,onClick,children}){return <button onClick={onClick} style={{padding:"11px 14px",border:"none",
+  borderBottom:active?"3px solid #b85c38":"3px solid transparent",background:active?"rgba(184,92,56,.08)":"transparent",
+  color:active?"#b85c38":"#666",fontWeight:active?700:500,cursor:"pointer",fontSize:13,whiteSpace:"nowrap",
+  display:"flex",alignItems:"center",gap:6}}>{children}</button>;}
+
+const IC={s:16};
+function IcoCalendar({active}){const c=active?"#b85c38":"#999";return <svg width={IC.s} height={IC.s} viewBox="0 0 22 24" fill="none" style={{flexShrink:0}}>
+  <rect x="0" y="3" width="22" height="20" rx="3" stroke={c} strokeWidth="1.5"/>
+  <line x1="0" y1="9" x2="22" y2="9" stroke={c} strokeWidth="1.5"/>
+  <line x1="6" y1="0" x2="6" y2="6" stroke={c} strokeWidth="1.5" strokeLinecap="round"/>
+  <line x1="16" y1="0" x2="16" y2="6" stroke={c} strokeWidth="1.5" strokeLinecap="round"/>
+  <circle cx="8" cy="16" r="1.5" fill={c}/><circle cx="14" cy="16" r="1.5" fill={c}/>
+</svg>;}
+function IcoClipboard({active}){const c=active?"#b85c38":"#999";return <svg width={IC.s} height={IC.s} viewBox="0 0 24 24" fill="none" style={{flexShrink:0}}>
+  <rect x="3" y="1" width="18" height="22" rx="2" stroke={c} strokeWidth="1.5"/>
+  <rect x="7" y="-1" width="10" height="5" rx="1.5" stroke={c} strokeWidth="1.5"/>
+  <line x1="8" y1="11" x2="18" y2="11" stroke={c} strokeWidth="1.2" strokeLinecap="round"/>
+  <line x1="8" y1="15" x2="16" y2="15" stroke={c} strokeWidth="1.2" strokeLinecap="round"/>
+  <line x1="8" y1="19" x2="13" y2="19" stroke={c} strokeWidth="1.2" strokeLinecap="round"/>
+</svg>;}
+function IcoCompare({active}){const c=active?"#b85c38":"#999";return <svg width={IC.s} height={IC.s} viewBox="0 0 24 24" fill="none" style={{flexShrink:0}}>
+  <path d="M2 8L10 2L18 8" stroke={c} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+  <path d="M6 16L14 22L22 16" stroke={c} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+  <line x1="10" y1="2" x2="10" y2="18" stroke={c} strokeWidth="1.5" strokeLinecap="round"/>
+  <line x1="14" y1="6" x2="14" y2="22" stroke={c} strokeWidth="1.5" strokeLinecap="round"/>
+</svg>;}
+function IcoChart({active}){const c=active?"#b85c38":"#999";return <svg width={IC.s} height={IC.s} viewBox="0 0 22 24" fill="none" style={{flexShrink:0}}>
+  <rect x="1" y="14" width="5" height="10" rx="1" fill={c}/>
+  <rect x="8" y="8" width="5" height="16" rx="1" fill={c} opacity="0.7"/>
+  <rect x="15" y="2" width="5" height="22" rx="1" fill={c} opacity="0.5"/>
+</svg>;}
+function IcoCoin(){return <svg width="14" height="14" viewBox="0 0 20 20" fill="none" style={{display:"inline",verticalAlign:"middle",marginRight:3}}>
+  <circle cx="10" cy="10" r="8.5" stroke="#b85c38" strokeWidth="1.5"/>
+  <text x="10" y="14" textAnchor="middle" style={{fontSize:"11px",fontWeight:600,fill:"#b85c38",fontFamily:"sans-serif"}}>$</text>
+</svg>;}
+function IcoGear(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{display:"inline",verticalAlign:"middle",marginRight:4}}>
+  <circle cx="12" cy="12" r="3.5" stroke="#b85c38" strokeWidth="1.5"/>
+  <path d="M12 1v3M12 20v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M1 12h3M20 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12" stroke="#b85c38" strokeWidth="1.5" strokeLinecap="round"/>
+</svg>;}
+function IcoTrend(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{display:"inline",verticalAlign:"middle",marginRight:4}}>
+  <polyline points="3,18 9,12 13,15 21,6" stroke="#b85c38" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+  <polyline points="16,6 21,6 21,11" stroke="#b85c38" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+</svg>;}
+function IcoBook(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{display:"inline",verticalAlign:"middle",marginRight:4}}>
+  <path d="M2 4c2-1 5-1.5 10 0v17c-5-1.5-8-1-10 0V4z" stroke="#b85c38" strokeWidth="1.5" strokeLinejoin="round"/>
+  <path d="M22 4c-2-1-5-1.5-10 0v17c5-1.5 8-1 10 0V4z" stroke="#b85c38" strokeWidth="1.5" strokeLinejoin="round"/>
+</svg>;}
+function IcoBulb(){return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{display:"inline",verticalAlign:"middle",marginRight:4}}>
+  <path d="M9 21h6M12 3a7 7 0 00-4 12.7V18h8v-2.3A7 7 0 0012 3z" stroke="#b85c38" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+</svg>;}
+function Card({title,children,accent}){return <div style={{background:"#fff",borderRadius:14,padding:"18px 20px",
+  borderLeft:accent?`4px solid ${accent}`:"none",boxShadow:"0 1px 6px rgba(0,0,0,.05)"}}>
+  {title&&<h3 style={{margin:"0 0 14px",fontSize:15,color:"#b85c38",fontWeight:700,display:"flex",alignItems:"center",gap:6}}>{title}</h3>}{children}</div>;}
+function Stat({label,value,sub,color}){return <div style={{textAlign:"center",padding:"4px 0"}}>
+  <div style={{fontSize:11,color:"#888",marginBottom:4,fontWeight:500}}>{label}</div>
+  <div style={{fontSize:20,fontWeight:800,color:color||"#b85c38",letterSpacing:"-.5px"}}>{value}</div>
+  {sub&&<div style={{fontSize:10,color:"#aaa",marginTop:2}}>{sub}</div>}</div>;}
+function InputRow({label,value,onChange,unit,min,max,step,sublabel}){return <div style={{marginBottom:16}}>
+  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+    <label style={{fontSize:13,color:"#444",fontWeight:500}}>{label}</label>
+    <span style={{fontSize:14,fontWeight:700,color:"#b85c38"}}>{unit==="¥"?J(value):unit==="$"?D(value):`${value}${unit||""}`}</span></div>
+  {sublabel&&<div style={{fontSize:11,color:"#888",marginBottom:4}}>{sublabel}</div>}
+  <input type="range" min={min} max={max} step={step||1} value={value} onChange={e=>onChange(Number(e.target.value))} style={{width:"100%"}}/></div>;}
+
+function MoneyInput({value,onChange}){
+  const[editing,setEditing]=useState(false);
+  const[raw,setRaw]=useState("");
+  const startEdit=()=>{setRaw(String(value));setEditing(true);};
+  const endEdit=()=>{const num=Number(raw.replace(/[^0-9.-]/g,""))||0;onChange(num);setEditing(false);};
+  const onKey=(e)=>{if(e.key==="Enter")e.target.blur();};
+  return editing
+    ?<input type="text" value={raw} onChange={e=>setRaw(e.target.value)} onBlur={endEdit} onKeyDown={onKey} autoFocus
+      style={{width:"100%",padding:"8px 10px",border:"1px solid #b85c38",borderRadius:6,fontSize:13,textAlign:"right"}}/>
+    :<div onClick={startEdit} style={{width:"100%",padding:"8px 10px",border:"1px solid #ddd",borderRadius:6,fontSize:13,
+      textAlign:"right",cursor:"text",background:"#fff"}}>
+      {Math.round(value).toLocaleString()}</div>;
+}
+
+function MoneyCell({value,onChange,fx,cur,w}){
+  // value is always stored in JPY internally
+  const[editing,setEditing]=useState(false);
+  const[raw,setRaw]=useState("");
+  const displayVal=cur==="usd"?Math.round(value/fx):Math.round(value);
+  const convVal=cur==="usd"?J(value):D(value/fx);
+  const formatted=displayVal.toLocaleString();
+
+  const startEdit=()=>{setRaw(String(displayVal));setEditing(true);};
+  const endEdit=()=>{
+    const cleaned=raw.replace(/[^0-9.-]/g,"");
+    const num=Number(cleaned)||0;
+    const jpyVal=cur==="usd"?Math.round(num*fx):num;
+    onChange(jpyVal);
+    setEditing(false);
+  };
+  const onKey=(e)=>{if(e.key==="Enter")e.target.blur();};
+
+  return <td style={tdS}>
+    <div style={{position:"relative"}}>
+      {editing?
+        <input type="text" value={raw} onChange={e=>setRaw(e.target.value)}
+          onBlur={endEdit} onKeyDown={onKey} autoFocus
+          style={{...nI,width:w||90,textAlign:"right"}}/>:
+        <div onClick={startEdit} style={{...nI,width:w||90,padding:"6px 8px",border:"1px solid #ddd",
+          borderRadius:6,cursor:"text",textAlign:"right",background:"#fff",fontSize:12,
+          whiteSpace:"nowrap",overflow:"hidden",minHeight:28}}>
+          {formatted}
+        </div>}
+      <div style={{fontSize:9,color:"#aaa",marginTop:2,textAlign:"right"}}>{convVal}</div>
+    </div>
+  </td>;
+}
+
+function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
+  const[cur,setCur]=useState("jpy");
+  const[expandedRow,setExpandedRow]=useState(null);
+  const up=(i,f,v)=>{const n=[...plans];n[i]={...n[i],[f]:v};setPlans(n);};
+  const add=()=>{if(plans.length>=MX)return;const l=plans[plans.length-1];setPlans([...plans,{...l,events:""}]);};
+  const rm=()=>{if(plans.length>1)setPlans(plans.slice(0,-1));};
+  const sym=cur==="jpy"?"¥":"$";
+  const gr=gradRate||0;
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10,gap:4}}>
+      <span style={{fontSize:12,color:"#888",alignSelf:"center",marginRight:4}}>{ko?"입력 통화":"Currency"}:</span>
+      {["jpy","usd"].map(c=><button key={c} onClick={()=>setCur(c)} style={{
+        padding:"5px 14px",borderRadius:6,border:cur===c?"2px solid #b85c38":"1px solid #ddd",
+        background:cur===c?"#faf0e6":"#fff",color:cur===c?"#b85c38":"#888",
+        fontWeight:cur===c?700:400,fontSize:12,cursor:"pointer"}}>
+        {c==="jpy"?"¥ JPY":"$ USD"}</button>)}
+    </div>
+    <div style={{overflowX:"auto",marginBottom:12,WebkitOverflowScrolling:"touch"}}>
+      <table style={{width:"100%",fontSize:12,minWidth:660}}>
+        <thead><tr style={{borderBottom:"2px solid #b85c38",background:"#faf6f0"}}>
+          <th style={thS}>{ko?"연도":"Year"}</th>
+          <th style={thS}>Ji {sym}</th>
+          <th style={thS}>Sarah {sym}</th>
+          <th style={thS}>{ko?"생활비":"Living"} {sym}</th>
+          <th style={thS}>{ko?"육아":"Baby"} {sym}</th>
+          <th style={{...thS,minWidth:110}}>{ko?"메모":"Notes"}</th>
+          <th style={thS}>{ko?"여유분":"Surplus"} <span style={{fontSize:9,cursor:"pointer"}} title={ko?"계산식 보기: 클릭":"Click for formula"}>ⓘ</span></th>
+        </tr></thead>
+        <tbody>{plans.map((p,i)=>{
+          const gradMul=Math.pow(1+gr/100,Math.floor(i/2));
+          const gradMinUSD=Math.round(1003.73*gradMul);
+          const loanJPY=Math.round(gradMinUSD*fx);
+          const surpBeforeSave=p.ji+p.sarah-p.living-loanJPY-(p.baby||0);
+          const actualSave=surpBeforeSave>=monthlySave?monthlySave:Math.max(0,surpBeforeSave);
+          const surplus=surpBeforeSave-actualSave;
+          const isDeficit=surpBeforeSave<0;
+          const isExpanded=expandedRow===i;
+          return <React.Fragment key={i}>
+            <tr style={{borderBottom:isExpanded?"none":"1px solid #eee",background:isDeficit?"#fdf8f8":"",verticalAlign:"top"}}>
+              <td style={{...tdS,fontWeight:700,color:"#b85c38",fontSize:13,paddingTop:12}}>{BY+i}</td>
+              <MoneyCell value={p.ji} onChange={v=>up(i,"ji",v)} fx={fx} cur={cur}/>
+              <MoneyCell value={p.sarah} onChange={v=>up(i,"sarah",v)} fx={fx} cur={cur}/>
+              <MoneyCell value={p.living} onChange={v=>up(i,"living",v)} fx={fx} cur={cur}/>
+              <MoneyCell value={p.baby||0} onChange={v=>up(i,"baby",v)} fx={fx} cur={cur} w={75}/>
+              <td style={{...tdS,verticalAlign:"top",paddingTop:8}}><div>
+                <input type="text" value={p.events||""} placeholder={ko?"예: 이직":"e.g. new job"}
+                onChange={e=>up(i,"events",e.target.value)} style={{...nI,width:"100%",minWidth:90}}/>
+                <div style={{height:14}}></div>
+              </div></td>
+              <td style={{...tdS,fontWeight:700,color:isDeficit?"#c0392b":surplus>0?"#27ae60":"#e67e22",fontSize:12,whiteSpace:"nowrap",cursor:"pointer",paddingTop:10}}
+                onClick={()=>setExpandedRow(isExpanded?null:i)}>
+                {isDeficit?<>{J(surpBeforeSave)}<br/><span style={{fontSize:10,color:"#c0392b",fontWeight:400}}>{ko?"적자":"deficit"} {isExpanded?"▲":"▼"}</span></>
+                  :<>{J(surplus)}<br/><span style={{fontSize:10,color:"#999",fontWeight:400}}>{D(surplus/fx)} {isExpanded?"▲":"▼"}</span></>}
+              </td>
+            </tr>
+            {isExpanded&&<tr style={{borderBottom:"1px solid #eee"}}>
+              <td colSpan={7} style={{padding:"10px 14px",background:"#faf6f0"}}>
+                <div style={{fontSize:11,color:"#555",lineHeight:1.9}}>
+                  <strong style={{color:"#b85c38"}}>{ko?"계산식":"Formula"}:</strong><br/>
+                  <span style={{color:"#27ae60"}}>+</span> Ji {J(p.ji)} <span style={{color:"#aaa"}}>({D(p.ji/fx)})</span><br/>
+                  <span style={{color:"#27ae60"}}>+</span> Sarah {J(p.sarah)} <span style={{color:"#aaa"}}>({D(p.sarah/fx)})</span><br/>
+                  <span style={{color:"#c0392b"}}>−</span> {ko?"생활비":"Living"} {J(p.living)}<br/>
+                  <span style={{color:"#c0392b"}}>−</span> {ko?"대출 최소납부":"Loan min. payment"} {J(loanJPY)} <span style={{color:"#aaa"}}>({D(gradMinUSD)}/월{gr>0&&i>0?` — Graduated ${Math.floor(i/2)+1}단계`:""})</span><br/>
+                  {(p.baby||0)>0&&<><span style={{color:"#c0392b"}}>−</span> {ko?"육아비":"Baby"} {J(p.baby)}<br/></>}
+                  <div style={{borderTop:"1px dashed #ccc",margin:"4px 0",padding:"4px 0"}}>
+                    <strong>= {ko?"저축·추가상환 전 잔액":"Before save/extra"}: {J(surpBeforeSave)} ({D(surpBeforeSave/fx)})</strong>
+                  </div>
+                  {isDeficit?
+                    <div style={{padding:"8px 10px",borderRadius:6,background:"#fdf0e8",color:"#c0392b",marginTop:4}}>
+                      {ko?<>
+                        ▲ <strong>적자:</strong> 수입이 생활비 + 대출 최소납부를 감당하지 못합니다.<br/>
+                        → 저축 불가, 추가상환 불가<br/>
+                        → 대출 최소납부({D(gradMinUSD)}/월)는 계속 진행됩니다 (상환이 멈추지 않음)<br/>
+                        → 부족분 {J(Math.abs(surpBeforeSave))}/월은 다른 곳에서 충당 필요
+                      </>:<>
+                        ▲ <strong>Deficit:</strong> Income can't cover living + loan minimum.<br/>
+                        → No savings, no extra repayment<br/>
+                        → Loan min. payment ({D(gradMinUSD)}/mo) continues (repayment doesn't stop)<br/>
+                        → Shortfall of {J(Math.abs(surpBeforeSave))}/mo needs to be covered elsewhere
+                      </>}
+                    </div>
+                  :<>
+                    <span style={{color:"#d4845a"}}>−</span> {ko?"월 저축":"Monthly save"} {J(actualSave)}
+                    {actualSave<monthlySave&&<span style={{color:"#e67e22"}}> ({ko?"목표":"target"} {J(monthlySave)}{ko?"에서 축소":"reduced"})</span>}<br/>
+                    <div style={{borderTop:"1px dashed #ccc",margin:"4px 0",padding:"4px 0"}}>
+                      <strong style={{color:"#27ae60"}}>= {ko?"추가상환 가능액":"Extra repayment"}: {J(surplus)} ({D(surplus/fx)}){ko?"/월":"/mo"}</strong>
+                    </div>
+                    <div style={{padding:"8px 10px",borderRadius:6,background:"#eafaf1",color:"#27ae60",marginTop:4}}>
+                      {ko?<>
+                        ✓ 대출 최소납부 ${D(gradMinUSD)}/월 + 추가 ${D(surplus/fx)}/월 = 총 ${D(gradMinUSD+surplus/fx)}/월 상환<br/>
+                        ✓ 저축 {J(actualSave)}/월 적립
+                      </>:<>
+                        ✓ Loan min. ${D(gradMinUSD)}/mo + extra ${D(surplus/fx)}/mo = ${D(gradMinUSD+surplus/fx)}/mo total<br/>
+                        ✓ Saving {J(actualSave)}/mo
+                      </>}
+                    </div>
+                  </>}
+                </div>
+              </td>
+            </tr>}
+          </React.Fragment>;})}</tbody>
+      </table>
+    </div>
+    <div style={{background:"#f5ede4",borderRadius:8,padding:"10px 14px",fontSize:11,color:"#666",marginBottom:12}}>
+      {ko?<>
+        <strong>여유분이란?</strong> 수입에서 생활비·<u>대출 최소납부(Graduated 증가 반영)</u>·육아비를 빼고, 저축 후 남는 금액.<br/>
+        양수(+)면 그만큼 <strong>추가상환</strong> 가능. 적자면 저축·추가상환 없이 <strong>최소납부만</strong> 진행.<br/>
+        ※ <strong>대출 최소납부 $1,004/월</strong>은 aidvantage에 매달 반드시 내는 금액입니다. 적자여도 이 납부는 계속됩니다.<br/>
+        <strong>여유분 숫자를 클릭하면</strong> 상세 계산식을 볼 수 있습니다.
+      </>:<>
+        <strong>Surplus</strong> = Income − Living − <u>Loan min. payment (Graduated increase applied)</u> − Baby − Savings.<br/>
+        Positive → extra repayment. Deficit → minimum payment only, no save/extra.<br/>
+        ※ <strong>Min. payment $1,004/mo</strong> is always paid to aidvantage, even in deficit.<br/>
+        <strong>Click surplus</strong> to see full formula.
+      </>}
+    </div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+      <button onClick={add} disabled={plans.length>=MX} style={{...btn,background:"#faf0e6",color:"#b85c38"}}>+ {ko?"추가":"Add"}</button>
+      <button onClick={rm} disabled={plans.length<=1} style={{...btn,background:"#fdf0e8",color:"#c0392b"}}>- {ko?"삭제":"Remove"}</button>
+    </div>
+  </div>;
+}
+
+function ResultTable({ys,ko,fx}){
+  if(!ys.length)return null;
+  return <div>
+    <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+      <table style={{width:"100%",fontSize:12,minWidth:720}}>
+        <thead><tr style={{borderBottom:"2px solid #b85c38",background:"#faf6f0"}}>
+          <th style={thS}>{ko?"연도":"Year"}</th>
+          <th style={thS}>{ko?"연초 잔액":"Start"}</th>
+          <th style={thS}>{ko?"이자":"Interest"}</th>
+          <th style={thS}>{ko?"원금 상환":"Principal"}</th>
+          <th style={thS}>{ko?"연말 잔액":"End"}</th>
+          <th style={thS}>{ko?"완납":"Paid Off"}</th>
+          <th style={{...thS,minWidth:160}}>{ko?"왜 이렇게 됐나":"Why"}</th>
+        </tr></thead>
+        <tbody>{ys.map((y,i)=>{
+          const red=y.startBal-y.endBal;const pct=y.startBal>0?((red/y.startBal)*100).toFixed(1):0;
+          const good=red>y.yearInterest;
+          const why=[];
+          // Strategy phase label
+          const phaseLabels=ko?{1:"🔹 1단계: 버티기",2:"🔸 2단계: 안정",3:"🟠 3단계: 공격",4:"🟢 4단계: 제거"}
+            :{1:"🔹 Phase 1: Survive",2:"🔸 Phase 2: Stable",3:"🟠 Phase 3: Attack",4:"🟢 Phase 4: Eliminate"};
+          const phaseColors={1:"#c0392b",2:"#e67e22",3:"#d4845a",4:"#27ae60"};
+          why.push(`<phase>${phaseLabels[y.phase]||phaseLabels[1]}`);
+          // Income situation
+          if(y.sarah===0)why.push(ko?"Sarah 무소득":"Sarah no income");
+          else if(y.sarah>=300000)why.push(ko?`Sarah ${J(y.sarah)} → 적극상환 가능`:`Sarah ${J(y.sarah)} → extra repay`);
+          else why.push(ko?`Sarah ${J(y.sarah)}`:`Sarah ${J(y.sarah)}`);
+          if(y.baby>0)why.push(ko?`육아비 ${J(y.baby)}`:`Baby ${J(y.baby)}`);
+          // Deficit or surplus
+          const sbSave=y.surplusBeforeSave;
+          if(sbSave<0){
+            why.push(ko?`▲ 적자 ${J(sbSave)}/월 → 저축·추가상환 불가`:`▲ Deficit ${J(sbSave)}/mo → no save/extra`);
+            why.push(ko?`▸ 최소납부 ${D(y.minPayUSD)}/월만 진행`:`▸ Min. payment ${D(y.minPayUSD)}/mo only`);
+          }else if(y.extraUSD>100){
+            why.push(ko?`월 ${D(y.extraUSD)} 추가상환`:`${D(y.extraUSD)}/mo extra repay`);
+            why.push(ko?`▸ 최소납부 ${D(y.minPayUSD)}/월 + 추가분`:`▸ Min. ${D(y.minPayUSD)}/mo + extra`);
+          }else{
+            why.push(ko?`▸ 최소납부 ${D(y.minPayUSD)}/월만 진행 (여유 적음)`:`▸ Min. ${D(y.minPayUSD)}/mo only (tight)`);
+          }
+          // Plan change
+          if(y.minPayUSD&&y.minPayUSD!==1003.73)why.push(ko?`▸ 플랜변경 → 월 ${D(y.minPayUSD)}`:`▸ Plan → ${D(y.minPayUSD)}/mo`);
+          // Savings (only show if actually saved)
+          if(y.yearSaved>0)why.push(ko?`● 저축 +${D(y.yearSaved)}(${J(y.yearSaved*fx)}) 누적 ${D(y.savings)}(${J(y.savings*fx)})`:`● Saved +${D(y.yearSaved)}(${J(y.yearSaved*fx)}) cum. ${D(y.savings)}(${J(y.savings*fx)})`);
+          else if(sbSave<0&&i===0)why.push(ko?"● 저축 불가 (적자)":"● Can't save (deficit)");
+          // Events
+          if(y.paidOff.length>0)why.push(`★ ${y.paidOff.join(", ")}`);
+          if(y.events)why.push(`▸ ${y.events}`);
+          if(y.endBal<1)why.push(ko?"★ 완납!":"★ Done!");
+
+          return <tr key={i} style={{borderBottom:"1px solid #eee",background:y.endBal<1?"#eafaf1":y.surplusJPY<0?"#fdf0e8":""}}>
+            <td style={{...tdS,fontWeight:700,color:"#b85c38"}}>{y.year}</td>
+            <td style={{...tdS,fontWeight:600}}>{D(y.startBal)}<br/><span style={{fontSize:9,color:"#aaa"}}>{J(y.startBal*fx)}</span></td>
+            <td style={{...tdS,color:"#c0392b"}}>{D(y.yearInterest)}<br/><span style={{fontSize:9,color:"#caa"}}>{J(y.yearInterest*fx)}</span></td>
+            <td style={{...tdS,color:"#27ae60",fontWeight:600}}>{D(y.yearPrincipal)}<br/><span style={{fontSize:9,color:"#8c8"}}>{J(y.yearPrincipal*fx)}</span></td>
+            <td style={{...tdS,fontWeight:700}}>
+              {D(y.endBal)}<br/>
+              <span style={{fontSize:9,color:"#aaa"}}>{J(y.endBal*fx)}</span><br/>
+              <span style={{fontSize:10,color:good?"#27ae60":"#e67e22"}}>{red>=0?`▼${pct}%`:`▲${Math.abs(pct)}%`}</span>
+            </td>
+            <td style={tdS}>{y.paidOff.length>0?
+              <span style={{background:"#27ae60",color:"#fff",padding:"2px 6px",borderRadius:4,fontSize:10,fontWeight:700}}>{y.paidOff.join(", ")}</span>:
+              <span style={{color:"#ccc"}}>—</span>}</td>
+            <td style={{...tdS,fontSize:11,lineHeight:1.5}}>{why.map((w,j)=>{
+              if(typeof w==="string"&&w.startsWith("<phase>")){
+                const phaseText=w.replace("<phase>","");
+                const pc=y.phase===1?"#c0392b":y.phase===2?"#e67e22":y.phase===3?"#d4845a":"#27ae60";
+                return <div key={j} style={{background:pc,color:"#fff",padding:"2px 8px",borderRadius:4,fontSize:10,
+                  fontWeight:700,display:"inline-block",marginBottom:4}}>{phaseText}</div>;
+              }
+              return <div key={j}>{w}</div>;
+            })}</td>
+          </tr>;})}</tbody>
+        <tfoot><tr style={{borderTop:"2px solid #b85c38",fontWeight:700,background:"#faf6f0"}}>
+          <td style={tdS}>{ko?"합계":"Total"}</td>
+          <td style={tdS}>{D(TOTAL_P)}<br/><span style={{fontSize:9,color:"#aaa",fontWeight:400}}>{J(TOTAL_P*fx)}</span></td>
+          <td style={{...tdS,color:"#c0392b"}}>{D(ys.reduce((a,y)=>a+y.yearInterest,0))}<br/><span style={{fontSize:9,color:"#caa",fontWeight:400}}>{J(ys.reduce((a,y)=>a+y.yearInterest,0)*fx)}</span></td>
+          <td style={{...tdS,color:"#27ae60"}}>{D(ys.reduce((a,y)=>a+y.yearPrincipal,0))}<br/><span style={{fontSize:9,color:"#8c8",fontWeight:400}}>{J(ys.reduce((a,y)=>a+y.yearPrincipal,0)*fx)}</span></td>
+          <td style={tdS}>{D(ys[ys.length-1]?.endBal||0)}<br/><span style={{fontSize:9,color:"#aaa",fontWeight:400}}>{J((ys[ys.length-1]?.endBal||0)*fx)}</span></td><td/><td/>
+        </tr></tfoot>
+      </table>
+    </div>
+  </div>;
+}
+
+function NarrativeSummary({ys,totInt,ko}){
+  return <div style={{fontSize:13,lineHeight:2,color:"#444"}}>
+    {ys.map((y,i)=>{
+      const red=y.startBal-y.endBal;const pct=(red/TOTAL_P*100).toFixed(1);
+      const cumPct=((TOTAL_P-y.endBal)/TOTAL_P*100).toFixed(1);
+      if(y.endBal<1)return <div key={i} style={{padding:"6px 0",color:"#27ae60",fontWeight:700,borderBottom:"1px solid #eafaf1"}}>
+        ★ {y.year}{ko?"년":""}:{ko?" 전액 상환 완료!":" All paid off!"} {ko?"총 이자":"Total interest"} {D(totInt)}</div>;
+      return <div key={i} style={{padding:"6px 0",borderBottom:"1px solid #f0f0f0"}}>
+        <strong style={{color:"#b85c38"}}>{y.year}{ko?"년":""}:</strong>{" "}
+        {D(y.startBal)} → {D(y.endBal)}{" "}
+        <span style={{color:"#27ae60",fontSize:12}}>({ko?"이 해":"yr"} {pct}%↓, {ko?"누적":"cum."} {cumPct}%)</span>
+        {y.events&&<span style={{color:"#888"}}> — {y.events}</span>}
+        {y.paidOff.length>0&&<span style={{color:"#27ae60",fontWeight:600}}> ★ {y.paidOff.join(", ")} {ko?"완납":"done"}</span>}
+      </div>;
+    })}
+  </div>;
+}
+
+function BarChart({tl,ko}){
+  if(!tl.length)return null;const mx=tl[0].totalBalance;const st=Math.max(1,Math.floor(tl.length/48));
+  const bars=tl.filter((_,i)=>i%st===0||i===tl.length-1);
+  return <div style={{padding:"12px 0"}}>
+    <div style={{display:"flex",alignItems:"flex-end",height:140,gap:1}}>
+      {bars.map((d,i)=>{const r=d.totalBalance/mx;const ir=d.interest/(d.interest+d.principal+.01);
+        return <div key={i} style={{flex:1,display:"flex",flexDirection:"column",height:"100%"}}>
+          <div style={{flex:1}}/><div style={{width:"100%",height:`${r*100}%`,
+            background:`linear-gradient(to top,#b85c38,${ir>.5?"#c0392b":"#d4845a"})`,
+            borderRadius:"2px 2px 0 0",minHeight:r>.001?2:0}}/></div>;})}
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#999",marginTop:6}}>
+      <span>0</span><span>{tl.length}{ko?"개월":"mo"} ({(tl.length/12).toFixed(1)}{ko?"년":"y"})</span></div>
+  </div>;
+}
+
+function ScenarioBar({scenarios,ko}){
+  const mx=Math.max(...scenarios.map(s=>s.months));
+  return <div style={{display:"flex",flexDirection:"column",gap:12}}>
+    {scenarios.map((s,i)=>{const y=(s.months/12).toFixed(1);const r=s.months/mx;
+      return <div key={i}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:4}}>
+          <span style={{fontSize:12,fontWeight:600}}>{s.label}</span>
+          <span style={{fontSize:12,fontWeight:700,color:"#b85c38"}}>{y}{ko?"년":"y"} · {ko?"이자":"int."} {D(s.interest)}</span></div>
+        <div style={{height:22,background:"#f0f0f0",borderRadius:10,overflow:"hidden"}}>
+          <div style={{height:"100%",width:`${r*100}%`,background:s.color,borderRadius:10,
+            display:"flex",alignItems:"center",justifyContent:"flex-end",paddingRight:8}}>
+            <span style={{fontSize:10,color:"#fff",fontWeight:700}}>{y}{ko?"년":"y"}</span></div></div>
+      </div>;})}
+  </div>;
+}
+
+function App(){
+  const[tab,setTab]=useState("sim");
+  const[lang,setLang]=useState("ko");
+  const ko=lang==="ko";
+  const[plans,setPlans]=useState([
+    {ji:300000,sarah:0,living:300000,baby:0,events:ko?"결혼·Sarah 구직중":"Marriage, job hunting"},
+    {ji:300000,sarah:220000,living:300000,baby:0,events:ko?"Sarah 비건축 취업":"Sarah non-arch job"},
+    {ji:320000,sarah:300000,living:310000,baby:0,events:ko?"Sarah 건축 이직":"Sarah arch job"},
+    {ji:350000,sarah:300000,living:320000,baby:50000,events:ko?"출산":"Baby born"},
+    {ji:350000,sarah:200000,living:330000,baby:60000,events:ko?"Sarah 시간제":"Sarah part-time"},
+    {ji:380000,sarah:300000,living:330000,baby:50000,events:ko?"Sarah 복직":"Sarah full-time"},
+  ]);
+  const[fx,setFx]=useState(150);
+  const[lumpSum,setLumpSum]=useState(0);
+  const[lumpSumMonth,setLumpSumMonth]=useState(0);
+  const[strategy,setStrategy]=useState("avalanche");
+  const[autoPay,setAutoPay]=useState(false);
+  const[monthlySave,setMonthlySave]=useState(30000);
+  const[sarahSavings,setSarahSavings]=useState(12000);
+  const[jiSavings,setJiSavings]=useState(0);
+  const initSavings=sarahSavings+jiSavings;
+  const[planChange,setPlanChange]=useState(false);
+  const[planChangeMonth,setPlanChangeMonth]=useState(10);
+  const[newMinPay,setNewMinPay]=useState(1500);
+  const[gradRate,setGradRate]=useState(15);
+
+  const sim=useMemo(()=>simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,
+    monthlySave,initSavings,planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate}),
+    [plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,monthlySave,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
+  const payY=(sim.monthsToPayoff/12).toFixed(1);
+  const payD=useMemo(()=>{const d=new Date(2026,11,1);d.setMonth(d.getMonth()+sim.monthsToPayoff);
+    return ko?`${d.getFullYear()}년 ${d.getMonth()+1}월`:`${d.getMonth()+1}/${d.getFullYear()}`;},[sim.monthsToPayoff,ko]);
+  const p0=plans[0];
+  const s0bSave=p0?(p0.ji+p0.sarah-p0.living-Math.round(1003.73*fx)-(p0.baby||0)):0;
+  const s0save=s0bSave>=monthlySave?monthlySave:Math.max(0,s0bSave);
+  const s0=s0bSave-s0save;
+
+  const qScen=useMemo(()=>{
+    const run=(label,mod,color)=>{const mp=plans.map((p,i)=>mod(p,i));
+      const r=simulate({plans:mp,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay,monthlySave,initSavings,
+        planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate});
+      return{label,months:r.monthsToPayoff,interest:r.totalInterestPaid,color};};
+    const scens=[
+      run(ko?"현재 계획":"Current plan",p=>p,"#b85c38"),
+      run(ko?"Sarah 계속 미취업":"Sarah always unemployed",p=>({...p,sarah:0}),"#c0392b"),
+      run(ko?"Sarah 건축 즉시취업":"Sarah arch job from yr 1",p=>({...p,sarah:300000}),"#27ae60"),
+      run(ko?"아이 계획 없음":"No baby",p=>({...p,baby:0}),"#d4845a"),
+    ];
+    if(!autoPay){
+      const rAP=simulate({plans,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay:true,monthlySave,initSavings,
+        planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate});
+      scens.push({label:ko?"Auto Pay 적용시":"With Auto Pay -0.25%",months:rAP.monthsToPayoff,interest:rAP.totalInterestPaid,color:"#8e44ad"});
+    }
+    return scens;
+  },[plans,strategy,fx,ko,autoPay,monthlySave,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
+
+  return <div style={{maxWidth:780,margin:"0 auto",padding:"20px 16px"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <div>
+        <h1 style={{fontSize:19,fontWeight:900,color:"#b85c38",margin:0}}>
+          {ko?"학자금 대출 상환 시뮬레이터":"Loan Repayment Simulator"}</h1>
+        <p style={{fontSize:11,color:"#888",margin:"4px 0 0"}}>Ji & Sarah · {D(TOTAL_P)}</p>
+      </div>
+      <button onClick={()=>setLang(ko?"en":"ko")} style={{padding:"6px 14px",borderRadius:8,border:"1px solid #ddd",
+        background:"#fff",fontSize:12,cursor:"pointer",fontWeight:700,color:"#b85c38"}}>{ko?"EN":"한국어"}</button>
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,background:"#fff",
+      borderRadius:14,padding:16,boxShadow:"0 1px 6px rgba(0,0,0,.05)",marginBottom:16}}>
+      <Stat label={ko?"완납 예상":"Payoff"} value={`${payY}${ko?"년":"y"}`} sub={payD}/>
+      <Stat label={ko?"총 이자":"Total Int."} value={D(sim.totalInterestPaid)} sub={J(sim.totalInterestPaid*fx)} color="#c0392b"/>
+      <Stat label={ko?"누적 비상자금":"Savings"} value={D(sim.yearSummaries.length?sim.yearSummaries[sim.yearSummaries.length-1].savings:initSavings)} sub={J((sim.yearSummaries.length?sim.yearSummaries[sim.yearSummaries.length-1].savings:initSavings)*fx)} color="#d4845a"/>
+      <Stat label={ko?"1년차 추가상환 가능":"Yr 1 Extra Repay"} value={s0bSave<0?(ko?"적자":"Deficit"):J(s0)} sub={s0bSave<0?J(s0bSave):D(s0/fx)} color={s0bSave<0?"#c0392b":s0>0?"#27ae60":"#e67e22"}/>
+      <Stat label={ko?"초기 저축":"Start Savings"} value={D(initSavings)} sub={`${J(initSavings*fx)}`}/>
+      <Stat label={ko?"총 상환액":"Total Paid"} value={D(TOTAL_P+sim.totalInterestPaid)} sub={J((TOTAL_P+sim.totalInterestPaid)*fx)}/>
+    </div>
+
+    <div style={{display:"flex",borderBottom:"1px solid #e0e0e0",marginBottom:16,overflowX:"auto"}}>
+      <Tab active={tab==="sim"} onClick={()=>setTab("sim")}><IcoCalendar active={tab==="sim"}/>{ko?"연도별 설정":"Plan"}</Tab>
+      <Tab active={tab==="result"} onClick={()=>setTab("result")}><IcoClipboard active={tab==="result"}/>{ko?"결과 해설":"Results"}</Tab>
+      <Tab active={tab==="compare"} onClick={()=>setTab("compare")}><IcoCompare active={tab==="compare"}/>{ko?"비교":"Compare"}</Tab>
+      <Tab active={tab==="detail"} onClick={()=>setTab("detail")}><IcoChart active={tab==="detail"}/>{ko?"대출 상세":"Loans"}</Tab>
+    </div>
+
+    {tab==="sim"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <Card title={ko?<><IcoCalendar active={true}/> 연도별 수입·지출 계획</>:<><IcoCalendar active={true}/> Yearly Plan</>} accent="#b85c38">
+        <YearTable plans={plans} setPlans={setPlans} ko={ko} fx={fx} monthlySave={monthlySave} gradRate={gradRate}/>
+      </Card>
+      <Card title={ko?<><IcoCoin/> 초기 저축 & 비상자금</>:<><IcoCoin/> Savings & Emergency Fund</>} accent="#d4845a">
+        <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:140}}>
+            <label style={{fontSize:12,color:"#444",fontWeight:500,display:"block",marginBottom:4}}>Sarah {ko?"저축":"savings"} ($)</label>
+            <MoneyInput value={sarahSavings} onChange={setSarahSavings}/>
+            <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{J(sarahSavings*fx)}</div>
+          </div>
+          <div style={{flex:1,minWidth:140}}>
+            <label style={{fontSize:12,color:"#444",fontWeight:500,display:"block",marginBottom:4}}>Ji {ko?"저축":"savings"} ($)</label>
+            <MoneyInput value={jiSavings} onChange={setJiSavings}/>
+            <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{J(jiSavings*fx)}</div>
+          </div>
+        </div>
+        <div style={{background:"#faf5ee",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#d4845a",marginBottom:12}}>
+          {ko?`합산 초기 저축: ${D(initSavings)} (${J(initSavings*fx)})`:`Total starting savings: ${D(initSavings)} (${J(initSavings*fx)})`}
+        </div>
+        <InputRow label={ko?"월 저축 목표 (비상자금)":"Monthly Savings Target"} value={monthlySave} onChange={setMonthlySave}
+          unit="¥" min={0} max={100000} step={5000}
+          sublabel={ko?`≈ ${D(monthlySave/fx)}/월 · 수입에서 저축 후 나머지만 추가상환`:`≈ ${D(monthlySave/fx)}/mo · saved before extra repayment`}/>
+      </Card>
+
+      <Card title={ko?<><IcoGear/> 대출 설정</>:<><IcoGear/> Loan Settings</>}>
+        <InputRow label={ko?"환율 (1 USD)":"Exchange Rate"} value={fx} onChange={setFx} unit="¥" min={120} max={180} step={1}/>
+
+        <div style={{marginBottom:16,padding:"12px 14px",background:"#fef6ed",borderRadius:8,border:"1px solid #e8c9a0"}}>
+          <InputRow label={ko?"Graduated 2년마다 증가율":"Graduated Increase Rate (every 2yr)"} value={gradRate} onChange={setGradRate}
+            unit="%" min={0} max={30} step={1}
+            sublabel={ko?`현재 $1,004 → 2년후 ${D(Math.round(1003.73*(1+gradRate/100)))} → 4년후 ${D(Math.round(1003.73*Math.pow(1+gradRate/100,2)))} → 6년후 ${D(Math.round(1003.73*Math.pow(1+gradRate/100,3)))}`
+              :`Now $1,004 → yr2 ${D(Math.round(1003.73*(1+gradRate/100)))} → yr4 ${D(Math.round(1003.73*Math.pow(1+gradRate/100,2)))} → yr6 ${D(Math.round(1003.73*Math.pow(1+gradRate/100,3)))}`}/>
+          <div style={{fontSize:11,color:"#888"}}>
+            {ko?"Graduated 상환은 보통 2년마다 10~30% 증가합니다. 0%로 설정하면 고정 납부로 계산됩니다."
+              :"Graduated payments typically increase 10-30% every 2 years. Set 0% for fixed payment."}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <label style={{fontSize:13,color:"#444",fontWeight:500}}>Auto Pay {ko?"금리 할인":"Rate Discount"} (-0.25%)</label>
+            <button onClick={()=>setAutoPay(!autoPay)} style={{
+              padding:"6px 16px",borderRadius:20,border:"none",fontSize:12,fontWeight:700,cursor:"pointer",
+              background:autoPay?"#27ae60":"#e0e0e0",color:autoPay?"#fff":"#888",transition:"all .2s"}}>
+              {autoPay?"ON":"OFF"}</button>
+          </div>
+          <div style={{fontSize:11,color:autoPay?"#27ae60":"#999"}}>
+            {autoPay
+              ?(ko?"✓ 적용중: 각 대출 금리에서 0.25% 차감됨":"✓ Applied: 0.25% deducted from each loan rate")
+              :(ko?"aidvantage에서 Auto Pay 등록하면 무료로 금리 인하. 시나리오 비교 탭에서 차이를 확인하세요."
+                :"Register Auto Pay on aidvantage for free rate reduction. See Compare tab for impact.")}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16,padding:"12px 14px",background:"#fef6ed",borderRadius:8,border:"1px solid #e8c9a0"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <label style={{fontSize:13,color:"#444",fontWeight:500}}>{ko?"2027 플랜 종료 반영":"2027 Plan End Simulation"}</label>
+            <button onClick={()=>setPlanChange(!planChange)} style={{
+              padding:"6px 16px",borderRadius:20,border:"none",fontSize:12,fontWeight:700,cursor:"pointer",
+              background:planChange?"#e67e22":"#e0e0e0",color:planChange?"#fff":"#888",transition:"all .2s"}}>
+              {planChange?"ON":"OFF"}</button>
+          </div>
+          <div style={{fontSize:11,color:"#888",marginBottom:planChange?8:0}}>
+            {ko?"Graduated Extended 플랜이 2027년 9~10월에 종료됩니다. 표준 상환으로 전환 시 월 납부액이 올라갈 수 있습니다."
+              :"Graduated Extended ends Sep-Oct 2027. Standard repayment may increase monthly payment."}
+          </div>
+          {planChange&&<div>
+            <InputRow label={ko?"플랜 변경 시점":"Plan Change Month"} value={planChangeMonth} onChange={setPlanChangeMonth}
+              unit={ko?"개월차":"mo"} min={6} max={24} step={1}
+              sublabel={ko?"결혼 후 기준 (예: 10 = 결혼 10개월 후)":"Months after start (e.g. 10 = 10 months in)"}/>
+            <InputRow label={ko?"변경 후 월 납부액":"New Monthly Payment"} value={newMinPay} onChange={setNewMinPay}
+              unit="$" min={1000} max={3000} step={50}
+              sublabel={ko?`현재 $1,004 → 변경 후 ${D(newMinPay)} (${J(newMinPay*fx)}/월)`
+                :`Current $1,004 → New ${D(newMinPay)} (${J(newMinPay*fx)}/mo)`}/>
+          </div>}
+        </div>
+
+        <InputRow label={ko?"목돈 일시 상환":"Lump Sum"} value={lumpSum} onChange={setLumpSum} unit="$" min={0} max={50000} step={1000}/>
+        {lumpSum>0&&<InputRow label={ko?"목돈 투입 시점":"Timing"} value={lumpSumMonth} onChange={setLumpSumMonth}
+          unit={ko?"개월차":"mo"} min={0} max={60} step={1}/>}
+        <div style={{marginTop:8}}>
+          <label style={{fontSize:13,color:"#444",fontWeight:500,marginBottom:8,display:"block"}}>{ko?"상환 전략":"Strategy"}</label>
+          <div style={{display:"flex",gap:8}}>
+            {[{id:"avalanche",l:ko?"고금리 우선":"High Rate First",d:ko?"이자 절약 극대화":"Max savings"},
+              {id:"snowball",l:ko?"소액 우선":"Small First",d:ko?"심리적 성취감":"Quick wins"}].map(s=>
+              <button key={s.id} onClick={()=>setStrategy(s.id)} style={{flex:1,padding:10,borderRadius:8,
+                border:strategy===s.id?"2px solid #b85c38":"1px solid #ddd",
+                background:strategy===s.id?"#faf0e6":"#fff",cursor:"pointer",textAlign:"left"}}>
+                <div style={{fontSize:11,fontWeight:strategy===s.id?700:400,color:strategy===s.id?"#b85c38":"#666"}}>{s.l}</div>
+                <div style={{fontSize:10,color:"#999",marginTop:2}}>{s.d}</div></button>)}
+          </div>
+        </div>
+      </Card>
+      <Card title={ko?<><IcoTrend/> 상환 추이</>:<><IcoTrend/> Timeline</>}><BarChart tl={sim.timeline} ko={ko}/></Card>
+    </div>}
+
+    {tab==="result"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <Card title={ko?<><IcoClipboard active={true}/> 연도별 상환 내역 — 왜 이렇게 됐나?</>:<><IcoClipboard active={true}/> Year-by-Year — Why?</>} accent="#b85c38">
+        <ResultTable ys={sim.yearSummaries} ko={ko} fx={fx}/>
+      </Card>
+      <Card title={ko?<><IcoBook/> 전체 흐름 요약</>:<><IcoBook/> Narrative Summary</>} accent="#27ae60">
+        <NarrativeSummary ys={sim.yearSummaries} totInt={sim.totalInterestPaid} ko={ko}/>
+      </Card>
+    </div>}
+
+    {tab==="compare"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <Card title={ko?<><IcoCompare active={true}/> 시나리오별 비교</>:<><IcoCompare active={true}/> Scenario Comparison</>} accent="#b85c38">
+        <ScenarioBar scenarios={qScen} ko={ko}/>
+        <div style={{fontSize:11,color:"#999",marginTop:12}}>
+          {ko?"※ 연도별 계획 기반, 각 변수 하나만 바꿔 비교":"※ One variable changed per scenario"}</div>
+      </Card>
+      <Card title={ko?<><IcoBulb/> 핵심 인사이트</>:<><IcoBulb/> Insights</>} accent="#27ae60">
+        <div style={{fontSize:13,lineHeight:1.8,color:"#444"}}>
+          {qScen[0].months>qScen[2].months*1.1&&<p style={{margin:"0 0 12px"}}>
+            <strong>{ko?"Sarah 취업 효과":"Sarah's employment impact"}</strong><br/>
+            {ko?`건축 즉시취업 시 현재 대비 ${((qScen[0].months-qScen[2].months)/12).toFixed(1)}년 단축, 이자 ${D(qScen[0].interest-qScen[2].interest)} 절약`
+              :`Arch job from yr 1: ${((qScen[0].months-qScen[2].months)/12).toFixed(1)} years faster, save ${D(qScen[0].interest-qScen[2].interest)}`}</p>}
+          {qScen[3].months<qScen[0].months&&<p style={{margin:"0 0 12px"}}>
+            <strong>{ko?"출산의 재정 영향":"Baby's financial impact"}</strong><br/>
+            {ko?`아이 없을 시 ${((qScen[0].months-qScen[3].months)/12).toFixed(1)}년 빨라짐. 출산을 미루라는 것이 아니라 재정 영향을 숫자로 확인하는 것`
+              :`Without baby: ${((qScen[0].months-qScen[3].months)/12).toFixed(1)} years faster. Not a recommendation — just the numbers.`}</p>}
+          <p style={{margin:0}}>
+            <strong>{ko?"고금리 우선 상환":"High-rate first"}</strong><br/>
+            {ko?"Loan 1-06 (7.08%)과 1-03 (7.00%)을 먼저 갚으면 이자를 수천 달러 절약합니다."
+              :"Pay 1-06 (7.08%) and 1-03 (7.00%) first to save thousands in interest."}</p>
+        </div>
+      </Card>
+    </div>}
+
+    {tab==="detail"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <Card title={ko?<><IcoChart active={true}/> 대출별 현재 상태</>:<><IcoChart active={true}/> Loan Info</>} accent="#b85c38">
+        {autoPay&&<div style={{fontSize:11,color:"#27ae60",marginBottom:10,fontWeight:600}}>
+          ✓ Auto Pay -0.25% {ko?"적용됨":"applied"}</div>}
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",fontSize:12,minWidth:400}}>
+          <thead><tr style={{borderBottom:"2px solid #b85c38"}}>
+            {[ko?"대출":"Loan",ko?"원금":"Principal",ko?"금리":"Rate",ko?"월 이자":"Mo.Int.",ko?"순위":"Priority"].map(h=>
+              <th key={h} style={thS}>{h}</th>)}</tr></thead>
+          <tbody>{[...LOANS].sort((a,b)=>b.rate-a.rate).map((l,i)=>{
+            const effRate=autoPay?Math.max(0,l.rate-0.25):l.rate;
+            const mi=l.principal*effRate/100/12;const pc=["#c0392b","#e67e22","#f39c12","#95a5a6"];
+            const pl=ko?["최우선","2순위","3순위","4순위"]:["Top","2nd","3rd","4th"];
+            return <tr key={l.id} style={{borderBottom:"1px solid #eee",background:i===0?"#fef6ed":""}}>
+              <td style={{...tdS,fontWeight:600}}>{l.id}</td><td style={tdS}>{D(l.principal)}</td>
+              <td style={{...tdS,fontWeight:700,color:effRate>=7?"#c0392b":"#333"}}>
+                {autoPay?<span><s style={{color:"#ccc"}}>{l.rate}%</s> → {effRate.toFixed(2)}%</span>:`${l.rate}%`}</td>
+              <td style={tdS}>{D(mi)}</td>
+              <td style={tdS}><span style={{background:pc[i],color:"#fff",padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:700}}>{pl[i]}</span></td>
+            </tr>;})}</tbody></table></div>
+      </Card>
+      <Card title={ko?<><IcoCoin/> 시뮬레이션 종료 시 잔액</>:<><IcoCoin/> End Balances</>} accent="#d4845a">
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {sim.timeline.length>0&&LOANS.map((l,i)=>{const last=sim.timeline[sim.timeline.length-1];
+            const cur=last.balances.find(b=>b.id===l.id);const po=cur&&cur.balance<1;
+            return <div key={l.id} style={{flex:"1 1 calc(50% - 4px)",minWidth:130,padding:12,borderRadius:8,
+              background:po?"#eafaf1":"#f7f2ec",border:`1px solid ${po?"#82e0aa":"#e0e0e0"}`}}>
+              <div style={{fontSize:11,color:"#888",fontWeight:600}}>{l.id} · {l.rate}%</div>
+              <div style={{fontSize:16,fontWeight:700,color:po?"#27ae60":"#b85c38",marginTop:4}}>
+                {po?(ko?"완납 ✓":"Paid ✓"):D(cur?.balance||0)}</div></div>;})}
+        </div>
+      </Card>
+
+      <Card title={ko?<><IcoBook/> Graduated 상환 구조 이해</>:<><IcoBook/> Understanding Graduated Repayment</>} accent="#b85c38">
+        <div style={{fontSize:13,lineHeight:1.9,color:"#444"}}>
+          <p style={{margin:"0 0 14px"}}>
+            <strong style={{color:"#b85c38"}}>{ko?"핵심 구조":"Core Structure"}</strong><br/>
+            {ko?"Graduated는 초반에 적게, 시간이 지날수록 많이 내는 구조. 보통 2년마다 10~30% 증가합니다. 지금은 편하지만, 원금이 늦게 줄어들어 전체적으로 이자를 더 많이 내게 됩니다."
+              :"Graduated starts low and increases over time, typically 10-30% every 2 years. Comfortable now, but principal decreases slowly — you pay more interest overall."}
+          </p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+            <div style={{flex:"1 1 45%",minWidth:140,padding:"10px 14px",borderRadius:8,background:"#fef6ed"}}>
+              <div style={{fontSize:11,color:"#b85c38",fontWeight:700,marginBottom:4}}>{ko?"고정 상환":"Fixed"}</div>
+              <div style={{fontSize:11,color:"#666"}}>{ko?"원금 빨리 감소 → 이자 적음":"Principal ↓ fast → less interest"}</div>
+            </div>
+            <div style={{flex:"1 1 45%",minWidth:140,padding:"10px 14px",borderRadius:8,background:"#fdf0e8"}}>
+              <div style={{fontSize:11,color:"#c0392b",fontWeight:700,marginBottom:4}}>Graduated</div>
+              <div style={{fontSize:11,color:"#666"}}>{ko?"원금 늦게 감소 → 이자 많음":"Principal ↓ slow → more interest"}</div>
+            </div>
+          </div>
+          <p style={{margin:"0 0 14px"}}>
+            <strong style={{color:"#b85c38"}}>{ko?"이걸 이기는 방법":"How to Beat It"}</strong><br/>
+            {ko?<>
+              1. <strong>최소 납부 이상을 내야</strong> 기간이 줄어듦 (최소만 내면 구조 유지일 뿐)<br/>
+              2. <strong>추가 상환분은 원금으로 직행</strong> → 이자 계산 기준 자체가 줄어듦<br/>
+              3. <strong>고금리 대출부터 제거</strong> (Avalanche) → 가장 비싼 이자 먼저 없앰<br/>
+              4. <strong>목돈은 나눠서가 아니라 한 번에, 빨리</strong> → 늦을수록 이자 증가
+            </>:<>
+              1. <strong>Pay more than minimum</strong> — minimum only maintains the structure<br/>
+              2. <strong>Extra goes straight to principal</strong> — reduces interest base<br/>
+              3. <strong>Highest rate first</strong> (Avalanche) — eliminate most expensive interest<br/>
+              4. <strong>Lump sums: all at once, ASAP</strong> — delay = more interest
+            </>}
+          </p>
+          <p style={{margin:"0 0 14px"}}>
+            <strong style={{color:"#b85c38"}}>{ko?"수입 없을 때":"When No Income"}</strong><br/>
+            {ko?"빨리 갚기보다 버티기가 우선. 최소 납부 유지 + 비상자금 확보. Graduated는 초기 부담이 낮아 이 시기에 오히려 적합한 구조."
+              :"Survival before speed. Maintain minimum + keep emergency fund. Graduated's low initial payments actually help during this period."}
+          </p>
+          <div style={{background:"#f5ede4",borderRadius:8,padding:"12px 14px",fontSize:12,color:"#b85c38",fontWeight:600}}>
+            {ko?"핵심: Graduated는 버티기용 구조. 이기려면 최소 이상을 계속 추가로 갚아야 한다."
+              :"Key: Graduated is a survival structure. To win, keep paying more than the minimum."}
+          </div>
+        </div>
+      </Card>
+
+      <Card title={ko?<><IcoTrend/> 전략 4단계 가이드</>:<><IcoTrend/> 4-Phase Strategy Guide</>} accent="#27ae60">
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {[
+            {phase:1,color:"#c0392b",
+              label:ko?"1단계: 버티기":"Phase 1: Survive",
+              desc:ko?"최소 납부 유지 · 현금 확보 · 추가 상환 금지 · Graduated 유지":"Min. payment · Cash reserves · No extra repay · Keep Graduated",
+              when:ko?"수입 불안정, Sarah 미취업":"Unstable income, Sarah unemployed"},
+            {phase:2,color:"#e67e22",
+              label:ko?"2단계: 안정":"Phase 2: Stabilize",
+              desc:ko?"추가 상환 시작 (소액) · 비상자금 3~6개월 확보":"Start small extra payments · Build 3-6mo emergency fund",
+              when:ko?"2인 소득, 여유분 소폭 양수":"Dual income, slight surplus"},
+            {phase:3,color:"#d4845a",
+              label:ko?"3단계: 공격":"Phase 3: Attack",
+              desc:ko?"적극 추가 상환 ($500+/월) · 고금리 대출 집중 제거":"Aggressive extra ($500+/mo) · Focus on highest rate loans",
+              when:ko?"안정적 소득, 비상자금 확보 완료":"Stable income, emergency fund secured"},
+            {phase:4,color:"#27ae60",
+              label:ko?"4단계: 제거":"Phase 4: Eliminate",
+              desc:ko?"목돈 투입 · 대출 하나씩 완납 · 최종 상환":"Lump sum · Pay off loans one by one · Final payoff",
+              when:ko?"여유 자금 확보, 대출 잔액 크게 감소":"Surplus secured, balance significantly reduced"},
+          ].map((ph,i)=><div key={i} style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+            <div style={{minWidth:60,textAlign:"center"}}>
+              <div style={{background:ph.color,color:"#fff",padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:700}}>{i+1}{ko?"단계":""}</div>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:700,color:ph.color,marginBottom:2}}>{ph.label}</div>
+              <div style={{fontSize:12,color:"#555",marginBottom:2}}>{ph.desc}</div>
+              <div style={{fontSize:11,color:"#999"}}>{ko?"조건":"When"}: {ph.when}</div>
+            </div>
+          </div>)}
+        </div>
+        <div style={{marginTop:14,fontSize:11,color:"#888"}}>
+          {ko?"※ 결과 해설 탭에서 각 연도가 어느 단계에 해당하는지 자동으로 표시됩니다."
+            :"※ The Results tab automatically labels each year's phase."}
+        </div>
+      </Card>
+
+    </div>}
+
+    <div style={{textAlign:"center",padding:"20px 0 8px",fontSize:11,color:"#bbb"}}>
+      {ko?"참고용 시뮬레이터 · 2026.05 기준":"Reference · May 2026 baseline"}</div>
+  </div>;
+}
+
+ReactDOM.render(<App/>,document.getElementById("root"));
+</script>
+</body>
+</html>
