@@ -1,6 +1,6 @@
 {
   "name": "Ji & Sarah 학자금 상환 시뮬레이터",
-  "short_name": "Loan Sim",
+  "short_name": "J&S Finance",
   "description": "Student loan repayment simulator for Ji & Sarah",
   "start_url": "./index.html",
   "display": "standalone",
