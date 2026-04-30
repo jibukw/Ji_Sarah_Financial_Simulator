@@ -4,12 +4,6 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>Ji & Sarah 학자금 대출 상환 시뮬레이터</title>
-<link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#b85c38" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="Loan Sim" />
-<link rel="apple-touch-icon" href="icons/icon-192x192.png" />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&display=swap" rel="stylesheet" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -31,13 +25,6 @@ table{border-collapse:collapse}
 </head>
 <body>
 <div id="root"></div>
-<script>
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('./sw.js').then(r=>console.log('SW ok')).catch(e=>console.log('SW fail',e));
-  });
-}
-</script>
 <script type="text/babel">
 const{useState,useMemo}=React;
 
@@ -583,7 +570,17 @@ function App(){
       <Stat label={ko?"완납 예상":"Payoff"} value={`${payY}${ko?"년":"y"}`} sub={payD}/>
       <Stat label={ko?"총 이자":"Total Int."} value={D(sim.totalInterestPaid)} sub={J(sim.totalInterestPaid*fx)} color="#c0392b"/>
       <Stat label={ko?"누적 비상자금":"Savings"} value={D(sim.yearSummaries.length?sim.yearSummaries[sim.yearSummaries.length-1].savings:initSavings)} sub={J((sim.yearSummaries.length?sim.yearSummaries[sim.yearSummaries.length-1].savings:initSavings)*fx)} color="#d4845a"/>
-      <Stat label={ko?"1년차 추가상환 가능":"Yr 1 Extra Repay"} value={s0bSave<0?(ko?"적자":"Deficit"):J(s0)} sub={s0bSave<0?J(s0bSave):D(s0/fx)} color={s0bSave<0?"#c0392b":s0>0?"#27ae60":"#e67e22"}/>
+      <Stat label={ko?"평균 월 추가상환":"Avg Monthly Extra"} value={(()=>{
+        const totExtra=sim.yearSummaries.reduce((a,y)=>a+(y.extraUSD||0)*12,0);
+        const months=sim.monthsToPayoff||1;
+        const avg=totExtra/months;
+        return avg>=1?D(avg):D(0);
+      })()} sub={(()=>{
+        const totExtra=sim.yearSummaries.reduce((a,y)=>a+(y.extraUSD||0)*12,0);
+        const months=sim.monthsToPayoff||1;
+        const avg=totExtra/months;
+        return J(avg*fx);
+      })()} color="#d4845a"/>
       <Stat label={ko?"초기 저축":"Start Savings"} value={D(initSavings)} sub={`${J(initSavings*fx)}`}/>
       <Stat label={ko?"총 상환액":"Total Paid"} value={D(TOTAL_P+sim.totalInterestPaid)} sub={J((TOTAL_P+sim.totalInterestPaid)*fx)}/>
     </div>
@@ -615,9 +612,15 @@ function App(){
         <div style={{background:"#faf5ee",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#d4845a",marginBottom:12}}>
           {ko?`합산 초기 저축: ${D(initSavings)} (${J(initSavings*fx)})`:`Total starting savings: ${D(initSavings)} (${J(initSavings*fx)})`}
         </div>
-        <InputRow label={ko?"월 저축 목표 (비상자금)":"Monthly Savings Target"} value={monthlySave} onChange={setMonthlySave}
-          unit="¥" min={0} max={100000} step={5000}
-          sublabel={ko?`≈ ${D(monthlySave/fx)}/월 · 수입에서 저축 후 나머지만 추가상환`:`≈ ${D(monthlySave/fx)}/mo · saved before extra repayment`}/>
+        <div style={{marginTop:14}}>
+          <label style={{fontSize:13,color:"#444",fontWeight:500,display:"block",marginBottom:4}}>
+            {ko?"월 저축 목표 (비상자금) ¥":"Monthly Savings Target ¥"}
+          </label>
+          <MoneyInput value={monthlySave} onChange={setMonthlySave}/>
+          <div style={{fontSize:11,color:"#888",marginTop:4}}>
+            ≈ {D(monthlySave/fx)}{ko?"/월 · 수입에서 저축 후 나머지만 추가상환":"/mo · saved before extra repayment"}
+          </div>
+        </div>
       </Card>
 
       <Card title={ko?<><IcoGear/> 대출 설정</>:<><IcoGear/> Loan Settings</>}>
