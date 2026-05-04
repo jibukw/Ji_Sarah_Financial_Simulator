@@ -46,12 +46,11 @@ function applyLump(bs,amt,strat){
   return bs;
 }
 
-function simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,monthlySave,initSavings,planChangeMonth,newMinPayUSD,gradRate}){
+function simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,initSavings,planChangeMonth,newMinPayUSD,gradRate}){
   const rateDisc=autoPay?0.25:0;
   const gr=gradRate||0; // graduated increase % every 2 years
   let bs=LOANS.map(l=>({...l,bal:l.principal,effRate:Math.max(0,l.rate-rateDisc)}));
   const tl=[];const ys=[];let totInt=0;let mo=0;let savings=initSavings||0;
-  const saveTarget=monthlySave||0;
   const pcm=planChangeMonth||0;
   const newMin=newMinPayUSD||0;
 
@@ -59,6 +58,7 @@ function simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,monthlySave,in
 
   for(let yr=0;yr<MX;yr++){
     const p=plans[yr]||plans[plans.length-1];
+    const saveTarget=p.save||0;
     // Graduated increase: every 2 years, min payment goes up by gr%
     const gradMultiplier=Math.pow(1+gr/100,Math.floor(yr/2));
     const gradMinUSD=Math.round(1003.73*gradMultiplier);
@@ -240,7 +240,7 @@ function MoneyCell({value,onChange,fx,cur,w}){
   </td>;
 }
 
-function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
+function YearTable({plans,setPlans,ko,fx,gradRate}){
   const[cur,setCur]=useState("jpy");
   const[expandedRow,setExpandedRow]=useState(null);
   const up=(i,f,v)=>{const n=[...plans];n[i]={...n[i],[f]:v};setPlans(n);};
@@ -259,12 +259,13 @@ function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
         {c==="jpy"?"¥ JPY":"$ USD"}</button>)}
     </div>
     <div style={{overflowX:"auto",marginBottom:12,WebkitOverflowScrolling:"touch"}}>
-      <table style={{width:"100%",fontSize:12,minWidth:660}}>
+      <table style={{width:"100%",fontSize:12,minWidth:740}}>
         <thead><tr style={{borderBottom:"2px solid #b85c38",background:"#faf6f0"}}>
           <th style={thS}>{ko?"연도":"Year"}</th>
           <th style={thS}>Ji {sym}</th>
           <th style={thS}>Sarah {sym}</th>
           <th style={thS}>{ko?"생활비":"Living"} {sym}</th>
+          <th style={thS}>{ko?"저축":"Save"} {sym}</th>
           <th style={thS}>{ko?"육아":"Baby"} {sym}</th>
           <th style={{...thS,minWidth:110}}>{ko?"메모":"Notes"}</th>
           <th style={thS}>{ko?"여유분":"Surplus"} <span style={{fontSize:9,cursor:"pointer"}} title={ko?"계산식 보기: 클릭":"Click for formula"}>ⓘ</span></th>
@@ -273,8 +274,9 @@ function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
           const gradMul=Math.pow(1+gr/100,Math.floor(i/2));
           const gradMinUSD=Math.round(1003.73*gradMul);
           const loanJPY=Math.round(gradMinUSD*fx);
+          const saveTarget=p.save||0;
           const surpBeforeSave=p.ji+p.sarah-p.living-loanJPY-(p.baby||0);
-          const actualSave=surpBeforeSave>=monthlySave?monthlySave:Math.max(0,surpBeforeSave);
+          const actualSave=surpBeforeSave>=saveTarget?saveTarget:Math.max(0,surpBeforeSave);
           const surplus=surpBeforeSave-actualSave;
           const isDeficit=surpBeforeSave<0;
           const isExpanded=expandedRow===i;
@@ -284,6 +286,7 @@ function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
               <MoneyCell value={p.ji} onChange={v=>up(i,"ji",v)} fx={fx} cur={cur}/>
               <MoneyCell value={p.sarah} onChange={v=>up(i,"sarah",v)} fx={fx} cur={cur}/>
               <MoneyCell value={p.living} onChange={v=>up(i,"living",v)} fx={fx} cur={cur}/>
+              <MoneyCell value={saveTarget} onChange={v=>up(i,"save",v)} fx={fx} cur={cur} w={75}/>
               <MoneyCell value={p.baby||0} onChange={v=>up(i,"baby",v)} fx={fx} cur={cur} w={75}/>
               <td style={{...tdS,verticalAlign:"top",paddingTop:8}}><div>
                 <input type="text" value={p.events||""} placeholder={ko?"예: 이직":"e.g. new job"}
@@ -297,7 +300,7 @@ function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
               </td>
             </tr>
             {isExpanded&&<tr style={{borderBottom:"1px solid #eee"}}>
-              <td colSpan={7} style={{padding:"10px 14px",background:"#faf6f0"}}>
+              <td colSpan={8} style={{padding:"10px 14px",background:"#faf6f0"}}>
                 <div style={{fontSize:11,color:"#555",lineHeight:1.9}}>
                   <strong style={{color:"#b85c38"}}>{ko?"계산식":"Formula"}:</strong><br/>
                   <span style={{color:"#27ae60"}}>+</span> Ji {J(p.ji)} <span style={{color:"#aaa"}}>({D(p.ji/fx)})</span><br/>
@@ -324,7 +327,7 @@ function YearTable({plans,setPlans,ko,fx,monthlySave,gradRate}){
                     </div>
                   :<>
                     <span style={{color:"#d4845a"}}>−</span> {ko?"월 저축":"Monthly save"} {J(actualSave)}
-                    {actualSave<monthlySave&&<span style={{color:"#e67e22"}}> ({ko?"목표":"target"} {J(monthlySave)}{ko?"에서 축소":"reduced"})</span>}<br/>
+                    {actualSave<saveTarget&&<span style={{color:"#e67e22"}}> ({ko?"목표":"target"} {J(saveTarget)}{ko?"에서 축소":"reduced"})</span>}<br/>
                     <div style={{borderTop:"1px dashed #ccc",margin:"4px 0",padding:"4px 0"}}>
                       <strong style={{color:"#27ae60"}}>= {ko?"추가상환 가능액":"Extra repayment"}: {J(surplus)} ({D(surplus/fx)}){ko?"/월":"/mo"}</strong>
                     </div>
@@ -503,19 +506,18 @@ function App(){
   const[lang,setLang]=useState("ko");
   const ko=lang==="ko";
   const[plans,setPlans]=useState([
-    {ji:300000,sarah:0,living:300000,baby:0,events:ko?"결혼·Sarah 구직중":"Marriage, job hunting"},
-    {ji:300000,sarah:220000,living:300000,baby:0,events:ko?"Sarah 비건축 취업":"Sarah non-arch job"},
-    {ji:320000,sarah:300000,living:310000,baby:0,events:ko?"Sarah 건축 이직":"Sarah arch job"},
-    {ji:350000,sarah:300000,living:320000,baby:50000,events:ko?"출산":"Baby born"},
-    {ji:350000,sarah:200000,living:330000,baby:60000,events:ko?"Sarah 시간제":"Sarah part-time"},
-    {ji:380000,sarah:300000,living:330000,baby:50000,events:ko?"Sarah 복직":"Sarah full-time"},
+    {ji:300000,sarah:0,living:300000,save:30000,baby:0,events:ko?"결혼·Sarah 구직중":"Marriage, job hunting"},
+    {ji:300000,sarah:220000,living:300000,save:30000,baby:0,events:ko?"Sarah 비건축 취업":"Sarah non-arch job"},
+    {ji:320000,sarah:300000,living:310000,save:50000,baby:0,events:ko?"Sarah 건축 이직":"Sarah arch job"},
+    {ji:350000,sarah:300000,living:320000,save:50000,baby:50000,events:ko?"출산":"Baby born"},
+    {ji:350000,sarah:200000,living:330000,save:30000,baby:60000,events:ko?"Sarah 시간제":"Sarah part-time"},
+    {ji:380000,sarah:300000,living:330000,save:50000,baby:50000,events:ko?"Sarah 복직":"Sarah full-time"},
   ]);
   const[fx,setFx]=useState(150);
   const[lumpSum,setLumpSum]=useState(0);
   const[lumpSumMonth,setLumpSumMonth]=useState(0);
   const[strategy,setStrategy]=useState("avalanche");
   const[autoPay,setAutoPay]=useState(false);
-  const[monthlySave,setMonthlySave]=useState(30000);
   const[sarahSavings,setSarahSavings]=useState(12000);
   const[jiSavings,setJiSavings]=useState(0);
   const initSavings=sarahSavings+jiSavings;
@@ -525,19 +527,19 @@ function App(){
   const[gradRate,setGradRate]=useState(15);
 
   const sim=useMemo(()=>simulate({plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,
-    monthlySave,initSavings,planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate}),
-    [plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,monthlySave,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
+    initSavings,planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate}),
+    [plans,lumpSum,lumpSumMonth,strategy,fx,autoPay,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
   const payY=(sim.monthsToPayoff/12).toFixed(1);
   const payD=useMemo(()=>{const d=new Date(2026,11,1);d.setMonth(d.getMonth()+sim.monthsToPayoff);
     return ko?`${d.getFullYear()}년 ${d.getMonth()+1}월`:`${d.getMonth()+1}/${d.getFullYear()}`;},[sim.monthsToPayoff,ko]);
   const p0=plans[0];
   const s0bSave=p0?(p0.ji+p0.sarah-p0.living-Math.round(1003.73*fx)-(p0.baby||0)):0;
-  const s0save=s0bSave>=monthlySave?monthlySave:Math.max(0,s0bSave);
+  const p0save=p0?(p0.save||0):0;const s0save=s0bSave>=p0save?p0save:Math.max(0,s0bSave);
   const s0=s0bSave-s0save;
 
   const qScen=useMemo(()=>{
     const run=(label,mod,color)=>{const mp=plans.map((p,i)=>mod(p,i));
-      const r=simulate({plans:mp,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay,monthlySave,initSavings,
+      const r=simulate({plans:mp,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay,initSavings,
         planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate});
       return{label,months:r.monthsToPayoff,interest:r.totalInterestPaid,color};};
     const scens=[
@@ -547,12 +549,12 @@ function App(){
       run(ko?"아이 계획 없음":"No baby",p=>({...p,baby:0}),"#d4845a"),
     ];
     if(!autoPay){
-      const rAP=simulate({plans,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay:true,monthlySave,initSavings,
+      const rAP=simulate({plans,lumpSum:0,lumpSumMonth:0,strategy,fx,autoPay:true,initSavings,
         planChangeMonth:planChange?planChangeMonth:0,newMinPayUSD:planChange?newMinPay:0,gradRate});
       scens.push({label:ko?"Auto Pay 적용시":"With Auto Pay -0.25%",months:rAP.monthsToPayoff,interest:rAP.totalInterestPaid,color:"#8e44ad"});
     }
     return scens;
-  },[plans,strategy,fx,ko,autoPay,monthlySave,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
+  },[plans,strategy,fx,ko,autoPay,initSavings,planChange,planChangeMonth,newMinPay,gradRate]);
 
   return <div style={{maxWidth:780,margin:"0 auto",padding:"20px 16px"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -594,7 +596,7 @@ function App(){
 
     {tab==="sim"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
       <Card title={ko?<><IcoCalendar active={true}/> 연도별 수입·지출 계획</>:<><IcoCalendar active={true}/> Yearly Plan</>} accent="#b85c38">
-        <YearTable plans={plans} setPlans={setPlans} ko={ko} fx={fx} monthlySave={monthlySave} gradRate={gradRate}/>
+        <YearTable plans={plans} setPlans={setPlans} ko={ko} fx={fx} gradRate={gradRate}/>
       </Card>
       <Card title={ko?<><IcoCoin/> 초기 저축 & 비상자금</>:<><IcoCoin/> Savings & Emergency Fund</>} accent="#d4845a">
         <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
@@ -609,17 +611,12 @@ function App(){
             <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{J(jiSavings*fx)}</div>
           </div>
         </div>
-        <div style={{background:"#faf5ee",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#d4845a",marginBottom:12}}>
+        <div style={{background:"#faf5ee",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#d4845a"}}>
           {ko?`합산 초기 저축: ${D(initSavings)} (${J(initSavings*fx)})`:`Total starting savings: ${D(initSavings)} (${J(initSavings*fx)})`}
         </div>
-        <div style={{marginTop:14}}>
-          <label style={{fontSize:13,color:"#444",fontWeight:500,display:"block",marginBottom:4}}>
-            {ko?"월 저축 목표 (비상자금) ¥":"Monthly Savings Target ¥"}
-          </label>
-          <MoneyInput value={monthlySave} onChange={setMonthlySave}/>
-          <div style={{fontSize:11,color:"#888",marginTop:4}}>
-            ≈ {D(monthlySave/fx)}{ko?"/월 · 수입에서 저축 후 나머지만 추가상환":"/mo · saved before extra repayment"}
-          </div>
+        <div style={{fontSize:11,color:"#888",marginTop:10,padding:"8px 12px",background:"#f5ede4",borderRadius:6}}>
+          {ko?"※ 월 저축 금액은 [연도별 수입·지출 계획] 표의 [저축] 열에서 매년 다르게 설정할 수 있습니다."
+            :"※ Monthly savings is now set per-year in the Savings column of the Yearly Plan table."}
         </div>
       </Card>
 
