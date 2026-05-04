@@ -1,4 +1,4 @@
-const CACHE_NAME = 'loan-sim-v4';
+const CACHE_NAME = 'loan-sim-v5';
 const ASSETS = [
   './',
   './index.html',
