@@ -29,10 +29,10 @@ table{border-collapse:collapse}
 const{useState,useMemo}=React;
 
 const LOANS=[
-  {id:"1-01",principal:43392.82,rate:6.84},
-  {id:"1-02",principal:44291.93,rate:6.31},
-  {id:"1-03",principal:49079.48,rate:7.0},
-  {id:"1-06",principal:33142.48,rate:7.08},
+  {id:"1-01",principal:43418.83,rate:6.84},
+  {id:"1-02",principal:44310.47,rate:6.31},
+  {id:"1-03",principal:49110.44,rate:7.0},
+  {id:"1-06",principal:19985.16,rate:7.08},
 ];
 const TOTAL_P=LOANS.reduce((a,l)=>a+l.principal,0);
 const J=n=>"¥"+Math.round(n).toLocaleString("ja-JP");
@@ -518,7 +518,7 @@ function App(){
   const[lumpSumMonth,setLumpSumMonth]=useState(0);
   const[strategy,setStrategy]=useState("avalanche");
   const[autoPay,setAutoPay]=useState(false);
-  const[sarahSavings,setSarahSavings]=useState(12000);
+  const[sarahSavings,setSarahSavings]=useState(0);
   const[jiSavings,setJiSavings]=useState(0);
   const initSavings=sarahSavings+jiSavings;
   const[planChange,setPlanChange]=useState(false);
